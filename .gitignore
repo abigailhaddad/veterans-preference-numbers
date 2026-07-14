@@ -1,0 +1,17 @@
+# Notebook / Python cruft
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# The essay itself is intentionally NOT part of this repo.
+# Guard against a draft getting committed by accident.
+drafts/
+*.docx
+*.doc
+*.rtf
+*.pdf
+*.odt
+essay*
+piece*
