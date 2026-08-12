@@ -21,8 +21,7 @@ Of the 276,214 people hired into the federal government in calendar year 2024:
 <!-- AUTOGEN:headline END -->
 
 **About a quarter of all federal hiring — the bottom two rows — can't be resolved either
-way.** That's the honest headline, and it's a property of the data, not of the effort spent
-on it.
+way.**
 
 ### By year
 
