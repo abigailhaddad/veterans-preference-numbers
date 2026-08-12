@@ -77,9 +77,10 @@ Derived by the notebook, separately from the crosswalk above:
 - **The flow, 2010–2024** — annual veteran new hires, 48,641 (2013) to 78,708 (2010), with
   the veteran share of all new hires falling from 30.2% (2010–2015) to 21.3% (2023–24).
 - **2024 vs 2025** — the hiring-freeze collapse: **56,235 → 24,942 veteran new hires, a 56%
-  drop.** An earlier version of this notebook read ~54k → ~21k (~60%), because it kept only
-  rows whose effective month matched their file's month. Those late-filed rows turn out to be
-  new records rather than repeats, so the old rule dropped real hires, mostly in 2025.
+  drop.** The earlier rule, which kept only rows whose effective month matched their file's
+  month, gave 54,364 → 21,365 (61%). Those late-filed rows are new records rather than
+  repeats, so that rule dropped real hires — under 1.5% a year through 2021, 3–5% for
+  2022–24, and 16.7% in 2025, which is why the drop shrank.
 - **Education** — federally-employed veterans with a bachelor's+ (~48%) vs veterans
   nationally (~32%).
 - **Where preference bites** — competitive vs excepted service, alongside MSPB's 50%-vs-22%
