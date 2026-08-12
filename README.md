@@ -2,9 +2,6 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/abigailhaddad/veterans-preference-numbers/blob/main/veterans_preference_numbers.ipynb)
 
-A single, self-contained notebook that derives the federal-workforce figures behind the
-argument that veterans' preference in federal hiring reaches only a minority of veterans.
-
 ## Which federal hires does veterans' preference actually reach?
 
 <!-- AUTOGEN:headline START -->
