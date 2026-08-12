@@ -79,15 +79,10 @@ Derived by the notebook, separately from the crosswalk above:
   their share of the veteran population (EHRI-as-is and coverage-adjusted).
 - **The flow, 2010–2024** — annual veteran new hires (~48k–78k), with the veteran share of
   all new hires falling from ~30% to ~21%.
-- **2024 vs 2025** — the hiring-freeze collapse (~54k → ~21k, a ~60% drop). **This one is
-  overstated and needs recomputing.** The notebook keeps, from each monthly file, only rows
-  whose effective month equals that file's month, on the stated grounds that late-recorded
-  actions "reappear in later files." They don't reappear — checked on effective months
-  202403, 202412 and 202506, the rows found in later files share *zero* keys with the rows
-  already in the month's own file across all 67 dimension columns. They're new records, so
-  the rule discards real hires rather than de-duplicating. It bites 2025 hardest, which is
-  the year the headline drop depends on. The crosswalk reads later files for exactly this
-  reason; the notebook still doesn't.
+- **2024 vs 2025** — the hiring-freeze collapse: **56,235 → 24,942 veteran new hires, a 56%
+  drop.** An earlier version of this notebook read ~54k → ~21k (~60%), because it kept only
+  rows whose effective month matched their file's month. Those late-filed rows turn out to be
+  new records rather than repeats, so the old rule dropped real hires, mostly in 2025.
 - **Education** — federally-employed veterans with a bachelor's+ (~48%) vs veterans
   nationally (~32%).
 - **Where preference bites** — competitive vs excepted service, alongside MSPB's 50%-vs-22%
