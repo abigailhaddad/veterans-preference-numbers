@@ -1,0 +1,29 @@
+veterans_preference,bucket,confidence,accessions,veterans,vet_pct
+Yes (applies),"Ordinary competitive GS/GG, permanent",residual,1018699.0,376359.0,36.94506424370692
+Yes (applies),"Competitive service, nonpermanent or other pay plan",residual,811177.0,249142.0,30.713642028805054
+Yes (applies),Pathways -- Intern/Student Trainee/Recent Graduate,confirmed,150481.0,19287.0,12.8169004724849
+Yes (applies),TSA own personnel system,confirmed,130101.0,16577.0,12.741639188015466
+Yes (applies),"Demonstration project / STRL / AcqDemo, competitive service",confirmed,87885.0,26544.0,30.203106332138592
+Yes (applies),FAA own personnel system,confirmed,48613.0,17606.0,36.21664986731944
+Yes (applies),Pathways -- Presidential Management Fellows,confirmed,3125.0,372.0,11.904
+Ambiguous (DHA-eligible),"Ordinary competitive GS/GG, permanent",residual,235772.0,95937.0,40.690582427090575
+Ambiguous (DHA-eligible),"Competitive service, nonpermanent or other pay plan",residual,29228.0,16942.0,57.96496510195702
+Ambiguous (DHA-eligible),Pathways -- Intern/Student Trainee/Recent Graduate,confirmed,2.0,2.0,100.0
+Limited (exempt from 302 ranking procedures),VA hybrid title 38 (38 USC 7401(3)),confirmed,197920.0,19680.0,9.943411479385611
+Limited (exempt from 302 ranking procedures),Attorney positions (302.101(c)(8)),confirmed,58275.0,6740.0,11.565851565851567
+Limited (exempt from 302 ranking procedures),Schedule C (political),confirmed,11120.0,312.0,2.805755395683453
+Limited (exempt from 302 ranking procedures),FDIC own personnel system,confirmed,10366.0,1198.0,11.557013312753233
+Limited (exempt from 302 ranking procedures),"VA hybrid title 38, VIPER Act additions (38 USC 7401(3))",confirmed,86.0,7.0,8.13953488372093
+No (outside title 5),VA pure title 38 (38 USC 7401(1)),confirmed,201436.0,22525.0,11.182211719851466
+No (outside title 5),5 USC 3109 expert/consultant/advisory,confirmed,19833.0,969.0,4.885796399939495
+No (outside title 5),PHS fellows/special consultants (42 USC 209(f)/(g)),confirmed,6742.0,35.0,0.5191337881934145
+No (outside title 5),Service academy faculty,confirmed,1195.0,296.0,24.769874476987447
+No (not preference-eligible),National Guard dual-status military technician (32 USC 709),inferred,166168.0,25266.0,15.205093640171393
+No (not preference-eligible),"DoD Cyber Excepted Service (inferred detection, confirmed preference status)",inferred,25518.0,13980.0,54.78485774747237
+No (not preference-eligible),SES career/limited,confirmed,5206.0,1187.0,22.800614675374568
+No (not preference-eligible),SES noncareer (political),confirmed,3578.0,291.0,8.133035215204025
+No (not preference-eligible),Senior/executive pay plan (EX/ES/SL/ST),confirmed,1989.0,276.0,13.8763197586727
+Unknown,"Other excepted service, authority unidentified",residual,383064.0,155420.0,40.57285466658313
+Unknown,Schedule A (subtype unknown),residual,349732.0,42079.0,12.031784337721456
+Unknown,Schedule B (subtype unknown),inferred,132127.0,8179.0,6.190256344274826
+Unknown,FEMA CORE / Reservist (Stafford Act),inferred,34513.0,2410.0,6.982876017732449

@@ -15,3 +15,12 @@ drafts/
 *.odt
 essay*
 piece*
+
+# macOS
+.DS_Store
+
+# Crosswalk run outputs. Only the CY2024 reference run is tracked; every other
+# window is a local artifact.
+crosswalk/crosswalk_*.csv
+!crosswalk/crosswalk_201001_202606.csv
+!crosswalk/crosswalk_by_year_201001_202606.csv

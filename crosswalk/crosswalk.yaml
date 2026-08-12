@@ -1,0 +1,1235 @@
+# Veterans'-preference crosswalk for OPM/EHRI accessions records.
+#
+# ONE file, two sections, read together by apply_crosswalk.py:
+#   `regimes`        - classifies each accession by which legal regime governed
+#                       veterans'-preference applicability for that hiring action
+#   `dha_authorities` - a separate, cross-cutting dimension: which government-wide
+#                       or DoD-specific direct-hire authorities the record's
+#                       series+grade+date+agency is ELIGIBLE under (not USED under
+#                       -- DHA eligibility leaves no trace in service type, pay
+#                       plan, or appointment type, so it has to be reconstructed
+#                       from primary-sourced authority grants instead of read off
+#                       a field). apply_crosswalk.py joins both onto every record
+#                       and produces one final "veterans_preference" verdict column:
+#                       Yes / Ambiguous (DHA-eligible) / Limited / No / Unknown.
+#
+# Classification uses ONLY fields present in the public impactproject/opm-ehri-data
+# accessions parquet (agency, agency_code, agency_subelement, occupational_series_code,
+# grade, position_occupied, appointment_type, pay_plan_code, pathways_group,
+# personnel_action_effective_date_yyyymm, veteran_indicator, count). No legal-
+# authority / nature-of-action code is published in that dataset, so most of this
+# crosswalk is inference from appointment mechanics, not a direct read of "which
+# statute applied." See `known_gaps` below before trusting any single bucket's
+# veteran share as a causal statement about preference.
+#
+# CITATIONS: every regime/authority entry carries a `sources:` list --
+# {cite, url, verified} -- instead of a bare citation string. `verified` records
+# HOW the citation was checked, not just that a claim was made:
+#   primary_text_read   - the actual statute/regulation/memo text was fetched and
+#                         read directly (quoted verbatim in `notes` where relevant)
+#   primary_doc_quoted_in_secondary - not fetched directly, but read verbatim as
+#                         quoted inside another primary document (e.g. NDAA section
+#                         numbers as cited inside the VA OCHCO bulletin PDF)
+#   search_summary_only  - sourced from an AI-generated web-search summary, never
+#                         independently re-read against the primary text. Treat
+#                         these as the weakest tier in the file; the citation is
+#                         probably right but has not been checked the way the
+#                         primary_text_read entries have.
+#   unverified            - a plausible extrapolation (e.g. assuming three parallel
+#                         academy pay statutes behave alike after verifying only
+#                         one) that was not itself checked.
+#
+# ACCURACY FLOOR: 2010-01. Confirmed via DESCRIBE across sample accessions
+# months, 2005-2024 (2026-08-07): pre-2010 files have 33 columns; 2010-01
+# jumps to 65+. veteran_indicator AND position_occupied both first appear at
+# 2010-01 -- not just veteran_indicator. position_occupied is the field nearly
+# every regime predicate below keys off (COMPETITIVE SERVICE / EXCEPTED
+# SERVICE), so pre-2010 records don't get misclassified, they silently
+# collapse into "Unknown" as every position_occupied-gated WHEN clause
+# evaluates NULL. apply_crosswalk.py enforces this floor by clamping --start.
+# Smaller, lower-stakes gap: pathways_group doesn't appear until ~2015, so
+# pathways_other's `pathways_group IS NOT NULL` branch can't fire 2010-2014
+# (its `SCHEDULE D` appointment_type branch can still catch some). Within
+# 2010-present, the only regime-specific date gates needed are already applied
+# below: dod_ces_inferred (eligible_from 2017-08) and va_title38_hybrid_viper
+# (eligible_from 2022-12) -- every other cited authority predates 2005.
+#
+# Rule evaluation order for `regimes` = list order below. First matching rule wins
+# (like SQL CASE). Rule evaluation order for `dha_authorities.*.covered_series` is
+# handled in apply_crosswalk.py: unconditional grants are checked before conditional
+# ones, since several series (2210, 1550, 0854, 1811, 0343) are covered by more than
+# one authority with different conditionality -- see that script's docstring.
+#
+# confidence (regimes):
+#   confirmed - the field combination is at or near definitional for the authority
+#   inferred  - a named, argued hypothesis; not verified against a legal-authority code
+#   residual  - a catch-all; may contain any authority not otherwise flagged
+#   NOTE: `confidence` grades the SQL DETECTION rule (does this predicate correctly
+#   identify records under this authority), which is a SEPARATE question from
+#   `sources.*.verified` (was the underlying legal claim itself checked against
+#   primary text). A `confirmed` detection rule can still cite a `search_summary_only`
+#   source -- read both fields before trusting an entry.
+#
+# preference_status (regimes):
+#   outside_title5          - appointed under a statute other than title 5; 5 USC
+#                             3309-3318 (mechanical preference) do not apply by their
+#                             terms
+#   exempt_from_302         - excepted service, exempt from 5 CFR 302 appointment
+#                             procedures under 302.101(c); preference survives only as
+#                             "a positive factor... as far as administratively feasible"
+#                             -- the closing sentence of 5 CFR 302.101(c) itself (see
+#                             attorney_302_exemption entry for the verified text).
+#                             5 USC 3320 is a related but separate provision: it
+#                             requires excepted-service selection to mirror the same
+#                             procedures required for the competitive service by
+#                             3308-3318, for any excepted position not otherwise
+#                             exempted under 302.101(c) -- i.e. 3320 is why ordinary
+#                             excepted hiring still gets preference procedures, and
+#                             302.101(c) is the list of what's carved OUT of that.
+#   not_preference_eligible - person-level exclusion from "preference eligible" under
+#                             5 USC 2108(3)/(4), independent of the appointment channel
+#   applies_full             - ordinary 5 USC 3309-3318 mechanical preference applies,
+#                             AS FAR AS THIS DATASET CAN TELL (see dha_blind_spot below;
+#                             apply_crosswalk.py further splits this into "Yes" vs
+#                             "Ambiguous (DHA-eligible)" using dha_authorities)
+#   unknown                  - cannot be determined from available fields
+
+metadata:
+  source_dataset: impactproject/opm-ehri-data (accessions)
+  fields_used:
+    - agency
+    - agency_code
+    - agency_subelement
+    - occupational_series_code
+    - grade
+    - position_occupied
+    - appointment_type
+    - pay_plan_code
+    - pathways_group
+  validated_window: "202401-202412"
+  validated_coverage:
+    confirmed_pct: 23.3
+    inferred_pct: 6.7
+    residual_pct: 69.9
+    note: >
+      Coverage measured against 273,730 accessions, CY2024, on the `regimes`
+      classification alone (before folding in dha_authorities). Once
+      dha_authorities is folded in via apply_crosswalk.py's combined verdict
+      column, 10.2% of all accessions and 18.4% of veteran hires land in
+      "Ambiguous (DHA-eligible)" rather than a clean Yes/No. See known_gaps for
+      what's still not covered.
+  citation_pass_note: >
+    Every citation in this file was fetched and read directly (see `sources` on
+    each entry; `verified: primary_text_read`), not taken from a search
+    summary, EXCEPT where marked `search_summary_only` or `unverified` --
+    those are flagged rather than silently treated as equivalent to the rest.
+    Two notes on provisions that are easy to get wrong: 5 USC 3320 does NOT
+    contain the "positive factor... as far as administratively feasible"
+    language cited throughout this file for exempt_from_302 -- that quote is
+    the closing sentence of 5 CFR 302.101(c) itself. 3320 instead requires
+    excepted-service selection to mirror 3308-3318 procedures except where
+    302.101(c) exempts a position. And VRA is a COMPETITIVE-SERVICE
+    appointment authority under 5 CFR 307.101 ("to positions in the
+    competitive service... without regard to the competitive examining
+    system"), not a Schedule B one -- VRA hires most likely sit inside the
+    ordinary competitive-service buckets, not Schedule B; see
+    schedule_b_unknown_subtype and known_gaps.vra_veoa_blind_spot. Graves v. VA (117
+    M.S.P.R. 697 (2012)) has no located public URL for the decision itself and
+    is cited without one rather than with a guessed link.
+
+known_gaps:
+  - id: dha_blind_spot
+    description: >
+      Direct-hire authority (5 USC 3304(a)(3); 5 CFR 337.201-337.202) waives 5 USC
+      3309-3318 (the entire mechanical preference apparatus: points, ranking, rule of
+      three) WITHOUT changing service type, pay plan, or appointment-type coding. A DHA
+      hire is recorded identically to an ordinary competitive GS/GG permanent hire.
+      There is no way to distinguish ELIGIBLE-AND-USED from ELIGIBLE-AND-NOT-USED in
+      this dataset. PARTIALLY BOUNDED (not closed) by this file's `dha_authorities`
+      section, which encodes seven confirmed authorities (six government-wide,
+      GW-001/002/006/007/008/009, plus one DoD-specific, Z5CL) by series+grade+date
+      (+agency, for Z5CL), sourced from primary CHCO/OSD memos and OPM's live DHA
+      listing page. Run against CY2024: 10.2% of all accessions and 18.4% of veteran
+      hires fall in a DHA-ELIGIBLE series/grade/date cell -- this is a real ceiling on
+      "applies_full," not a guess, but it is NOT usage, and it does not cover
+      agency-specific DHAs (see dha_not_covered_here below), which are most of actual
+      DHA usage government-wide and remain unresearched. Notably, DHA-eligible cells
+      skew HIGHER veteran share than the accession baseline (every source memo
+      instructs agencies to select preference eligibles as found, not to deprioritize
+      them) -- eligibility is not evidence of veteran exclusion.
+  - id: vra_veoa_blind_spot
+    description: >
+      Veterans Recruitment Appointment and Veterans Employment Opportunities Act
+      access (opens closed merit-promotion announcements to preference eligibles)
+      are both veteran-specific hiring mechanisms with no confirmed,
+      distinguishable field value in this dataset. OPM's FY2024 DVAAP report
+      (Employment of Veterans and Military-Connected Spouses and Survivors in the
+      Federal Executive Branch, Jan 2026) counts these centrally: 2,981 VRA hires
+      and 8,625 VEOA hires government-wide in FY2024 -- proving OPM has a
+      legal-authority-level field that is simply not published in the accessions
+      API.
+
+      VRA is a COMPETITIVE-SERVICE appointment authority, not a Schedule B one.
+      5 CFR 307.101: "This part implements 38 U.S.C. 4214 and Executive Order
+      11521, which authorizes agencies to appoint qualified covered veterans
+      to positions in the competitive service under Veterans Recruitment
+      Appointments (VRAs) without regard to the competitive examining system."
+      VRA hires are therefore most likely sitting inside this crosswalk's
+      ordinary "Ordinary competitive GS/GG, permanent" or "Competitive
+      service, nonpermanent or other pay plan" buckets -- recorded as
+      COMPETITIVE_SERVICE, appointment_type "OTHER" or similar -- not inside
+      Schedule B (which is excepted service). The VRA blind spot lives inside
+      those two large competitive-service buckets, which makes it a
+      consequential one: those buckets are the largest in the file and their
+      "applies_full" verdict already carries the separate DHA blind spot too.
+    sources:
+      - {cite: "38 U.S.C. 4214", url: "https://www.law.cornell.edu/uscode/text/38/4214", verified: primary_text_read}
+      - {cite: "5 CFR 307.101 (VRA implementing regulation -- competitive service, not Schedule B)",
+         url: "https://www.law.cornell.edu/cfr/text/5/307.101", verified: primary_text_read}
+  - id: schedule_a_subtype_blind_spot
+    description: >
+      Schedule A (5 CFR 213.3102) covers disability appointments (213.3102(u)),
+      attorney appointments (213.3102(d) -- see attorney_302_exemption, which
+      does not rely on Schedule A detection because 302.101(c)(8) exempts
+      attorney positions by name regardless of schedule), academy-adjacent
+      appointments, law clerk trainee positions (213.3102(e)), a DOJ witness-
+      program-adjacent authority (213.3102(gg), Public Law 91-452), and many
+      agency-specific OPM-approved authorities under 302.101(c)(6) -- which
+      additionally requires a SEPARATE OPM written concurrence before part 302
+      procedures are actually waived, that this dataset cannot observe. All of
+      these collapse into one appointment_type value and cannot be subtyped
+      here. VERIFIED DIRECTLY (2026-08-06): 213.3102(d) is a single-line
+      paragraph, "Attorneys.", confirming this crosswalk's longstanding
+      assumption that attorneys' Schedule A basis lives there; 213.3102(u) is
+      "Appointment of persons with intellectual disabilities, severe physical
+      disabilities, or psychiatric disabilities," multi-part, requiring
+      documented proof of disability.
+    sources:
+      - {cite: "5 CFR 213.3102", url: "https://www.law.cornell.edu/cfr/text/5/213.3102", verified: primary_text_read}
+      - {cite: "5 CFR 213.3102(d) (Attorneys)", url: "https://www.law.cornell.edu/cfr/text/5/213.3102", verified: primary_text_read}
+      - {cite: "5 CFR 213.3102(u) (disability appointments)", url: "https://www.law.cornell.edu/cfr/text/5/213.3102", verified: primary_text_read}
+  - id: disability_veteran_status_conflation
+    description: >
+      OPM's disabled-veteran hiring figures (Schedule A 213.3102(u), VRA, VEOA) are
+      about DISABILITY and/or VETERAN status of the person, not about a distinct
+      preference regime. Do not conflate "hired via a veteran-specific noncompetitive
+      channel" (a preference DELIVERY mechanism) with "exempt from preference" (VA
+      title 38, attorneys, SES) -- they are opposite in intent. This crosswalk keeps
+      them as separate buckets; downstream analysis should not merge them.
+  - id: military_spouse_authority_is_not_veterans_preference
+    description: >
+      Military-spouse noncompetitive hiring authorities are a SEPARATE statutory
+      basis from veterans' preference, AND explicitly preference-inapplicable, not
+      merely unrelated -- confirmed via VA/OCHCO Bulletin, "Military Spouse Hiring
+      Authorities" (amended 2024-03-12), covering EO 13473, EO 12721, and EO 13832
+      (see sources below for each). Quoted directly from the bulletin: "Veterans'
+      preference requirements do not apply when filling a job under this authority."
+      SF-50 codes exist (authority LAM/315.612 permanent, LDM/316.302(b)(3)MS term,
+      LCM/316.402(b)(3)MS temporary, ZJK/5 CFR 315.608 for EO 12721) but are
+      candidate-side (depends on the APPLICANT being a military spouse/family
+      member, not on the position) and, like VRA/VEOA, have no corresponding field
+      in public accessions data -- structurally uncodable here regardless of
+      research effort, not merely unresearched.
+    sources:
+      - {cite: "VA OCHCO Bulletin, \"Military Spouse Hiring Authorities\" (amended 2024-03-12)",
+         url: "https://www.vaforvets.va.gov/vaforvets/docs/OCHCO-bulletin-20240312-03.pdf",
+         verified: primary_text_read}
+      - {cite: "EO 13473 (2008, noncompetitive appointment of certain military spouses)",
+         url: "https://www.govinfo.gov/content/pkg/FR-2008-09-30/pdf/E8-23125.pdf",
+         verified: primary_doc_quoted_in_secondary}
+      - {cite: "5 U.S.C. 3330(d) (codifying EO 13473, via NDAA FY2013 Sec. 566(a), P.L. 112-239)",
+         url: "https://www.congress.gov/112/plaws/publ239/PLAW-112publ239.pdf",
+         verified: primary_doc_quoted_in_secondary}
+      - {cite: "NDAA FY2023 Sec. 1111, P.L. 117-263 (extends eligibility through 2028-12-31)",
+         url: "https://www.congress.gov/bill/117th-congress/house-bill/7776/text",
+         verified: primary_doc_quoted_in_secondary}
+      - {cite: "EO 12721 (1990, returning overseas family members), 5 CFR 315.608",
+         url: "https://www.govinfo.gov/content/pkg/CFR-2011-title5-vol1/pdf/CFR-2011-title5-vol1-sec315-608.pdf",
+         verified: primary_doc_quoted_in_secondary}
+      - {cite: "EO 13832 (2018, outreach/advertising requirements)",
+         url: "https://www.govinfo.gov/content/pkg/FR-2018-05-14/pdf/2018-10403.pdf",
+         verified: primary_doc_quoted_in_secondary}
+  - id: dha_true_scale_likely_much_larger_than_measured
+    description: >
+      MSPB's Feb 2021 research brief (Direct-Hire Authority Under 5 U.S.C. Sec
+      3304: Usage and Outcomes) reports DHA of all types reached ~27% of ALL
+      competitive-service hires by FY2018 and was still rising. It splits ALL DHA
+      appointments FY2014-2018 into three legal-authority families: Sec 3304 DHA
+      (government-wide + agency-specific under 5 USC 3304(a)(3)) = 39%; DoD-
+      specific DHA under various NDAAs (DoD officials cited "over 20 different
+      DHAs in the last 10 years or so") = 47%; DoD Laboratory Demonstration
+      Project DHA (Public Law 103-337, May 1996) = 14%. This file's
+      `dha_authorities` covers the government-wide slice of the FIRST category in
+      full, plus exactly ONE instance of the second (Z5CL) -- most of DoD's ~20
+      other NDAA-derived authorities, and all of the lab-demo-project category,
+      remain unresearched. Agency-specific Sec 3304 grants (VA, DHS, and DoD are
+      named by MSPB as the three largest Sec 3304 DHA users, tracking their
+      overall hiring volume) are also entirely unresearched. The measured 10.2%
+      DHA-eligible / 18.4% of veteran hires (CY2024, seven authorities) should be
+      read as a documented FLOOR from named, dated, primary-sourced authorities --
+      not an estimate of true DHA scale, which is almost certainly still larger.
+      OPM's internal legal-authority code families for this: AYM (Sec 3304,
+      government-wide or agency-specific, with secondary code BYO for any
+      agency-specific grant), and Z5C ("DIRECT-HIRE AUTHORITY" umbrella code
+      cited by MSPB for DoD lab-demo DHA) -- neither published in the public
+      accessions parquet. Other named-but-unresearched DoD DHAs found in this
+      research pass (not yet added as dha_authorities entries): NDAA FY16 Sec.
+      1112/1113 (technical acquisition positions), NDAA FY17 Sec. 1110 as amended
+      by FY18 Sec. 1106 (financial management experts).
+    sources:
+      - {cite: "MSPB, \"Direct-Hire Authority Under 5 U.S.C. Sec 3304: Usage and Outcomes\" (Feb 2021)",
+         url: "https://www.mspb.gov/studies/researchbriefs/Direct_Hire_Authority_Under_5_USC_%C2%A7_3304_Usage_and_Outcomes_1803830.pdf",
+         verified: primary_text_read}
+
+regimes:
+  - id: national_guard_dual_status_technician
+    label: "National Guard dual-status military technician (32 USC 709)"
+    plain_label: "National Guard dual-status technicians"
+    confidence: inferred  # agency-level detection can't distinguish 32 USC 709 employees from other Guard-unit civilian staff
+    legal_basis: "32 U.S.C. 709(g)(1)"
+    sources:
+      - {cite: "32 U.S.C. 709(g)(1)-(2)", url: "https://www.law.cornell.edu/uscode/text/32/709", verified: primary_text_read}
+      - {cite: "32 U.S.C. 709(b)-(e) (dual-status default, non-dual-status exception, competitive-service scope)",
+         url: "https://www.law.cornell.edu/uscode/text/32/709", verified: primary_text_read}
+    preference_status: not_preference_eligible  # CONFIRMED at the statute level; see note for what remains uncertain
+    notes: >
+      Resolves an anomaly noted earlier in this project: Air/Army National Guard
+      Units accessions run far below the government-wide veteran baseline despite
+      every incumbent plausibly being a current servicemember.
+
+      32 USC 709(g)(1) reads "Except as provided in subsection (f), sections
+      2108, 3502, 7511, and 7512 of title 5 do not apply to a person employed
+      under this section." 5 USC 2108 is the statute that defines "preference
+      eligible" -- so Congress made the entire veterans'-preference eligibility
+      framework inapplicable to persons employed under section 709.
+
+      This covers more than just dual-status (DS) technicians. Section 709
+      distinguishes DS (must maintain Guard membership per subsection (b), the
+      default) from non-dual-status (NDS, an exception under subsection (c),
+      capped per 10 USC 10217(c)(2)). Subsection (e)'s "outside the competitive
+      service" exclusion IS explicitly scoped to positions "required under
+      subsection (b)" (DS only) -- but subsection (g)(1)'s exclusion of section
+      2108 has no such qualifier; it applies broadly to "a person employed
+      under this section." Since NDS technicians are the statutorily-capped
+      minority exception rather than the default, (g)(1) most plausibly
+      excludes both DS and NDS technicians from preference eligibility. The
+      remaining uncertainty is in the DETECTION rule below (agency_subelement
+      LIKE '%NATIONAL GUARD%'), which cannot confirm a hire is actually
+      "employed under this section" at all, vs. e.g. ordinary title-5 civilian
+      staff who happen to work at a Guard unit -- not in the underlying legal
+      exclusion, which the statute states plainly.
+
+      Separately: current Guard members are typically NOT coded as "veteran" in
+      veteran_indicator (that field means separated/discharged service), so this
+      population's low observed veteran share is partly a DEFINITIONAL artifact,
+      not purely a preference-exclusion effect -- two distinct things pointing
+      the same direction.
+    sql_predicate: >
+      agency_subelement LIKE '%NATIONAL GUARD%'
+      AND position_occupied = 'EXCEPTED SERVICE'
+
+  - id: va_title38_pure
+    label: "VA pure title 38 (38 USC 7401(1))"
+    plain_label: "VA doctors, dentists, and nurses"
+    confidence: confirmed
+    legal_basis: "38 U.S.C. 7401(1)"
+    sources:
+      - {cite: "38 U.S.C. 7401(1)", url: "https://www.law.cornell.edu/uscode/text/38/7401", verified: primary_text_read}
+    preference_status: outside_title5
+    notes: >
+      Physicians, dentists, podiatrists, chiropractors, optometrists, RNs, PAs at VA.
+      Appointed outside title 5 entirely; title 5 preference procedures do not apply
+      by their terms. Detection matches on title-38 pay-plan codes (VM/VN/VP/VC/
+      VH/VF) OR on agency+series+excepted-service alone, since VA pay-plan coding
+      for these series is not fully consistent -- some VA 0602/0610 hires are
+      recorded on ordinary GS pay codes while still excepted-service, and those
+      are still almost certainly 7401(1) appointees. That agency+series+excepted
+      fallback is an UNVERIFIED assumption about VA's internal coding practice,
+      not something
+      independently confirmed against a VA source document.
+    sql_predicate: >
+      substr(agency_code,1,2)='VA'
+      AND (
+        pay_plan_code IN ('VM','VN','VP','VC','VH','VF')
+        OR (
+          occupational_series_code IN ('0602','0680','0668','0662','0610','0603')
+          AND position_occupied='EXCEPTED SERVICE'
+        )
+      )
+
+  - id: va_title38_hybrid_core
+    label: "VA hybrid title 38 (38 USC 7401(3))"
+    plain_label: "VA medical staff"
+    confidence: confirmed
+    legal_basis: "38 U.S.C. 7401(3); Graves v. VA, 117 M.S.P.R. 697 (2012); VA Handbook 5005"
+    sources:
+      - {cite: "38 U.S.C. 7401(3), current text", url: "https://www.law.cornell.edu/uscode/text/38/7401", verified: primary_text_read}
+      - {cite: "Graves v. VA, 117 M.S.P.R. 697 (2012)", url: null,
+         verified: search_summary_only, note: "Case citation; no verified public URL located in this research pass."}
+    preference_status: exempt_from_302
+    notes: >
+      Psychologists, pharmacists, speech pathologists/audiologists, dietitians,
+      occupational therapists, social workers, biomedical engineers, practical/
+      vocational nurses, nurse assistants, diagnostic radiologic technologists,
+      and medical technologists. Excepted from 5 CFR 302 appointment procedures,
+      but Graves holds VA must still apply title 5 veterans' preference
+      substantively.
+
+      Full current 38 USC 7401(3) text: "Audiologists, licensed hearing aid
+      specialists, speech pathologists, and audiologist-speech pathologists,
+      biomedical engineers, certified or registered respiratory therapists,
+      dietitians, licensed physical therapists, licensed practical or
+      vocational nurses, nurse assistants, medical instrument technicians,
+      medical records administrators or specialists, medical records
+      technicians, medical technologists, dental hygienists, dental assistants,
+      nuclear medicine technologists, occupational therapists, occupational
+      therapy assistants, kinesiotherapists, orthotist-prosthetists,
+      pharmacists, pharmacy technicians, physical therapy assistants,
+      prosthetic representatives, psychologists, diagnostic radiologic
+      technologists, therapeutic radiologic technologists, social workers,
+      marriage and family therapists, licensed professional mental health
+      counselors, blind rehabilitation specialists, blind rehabilitation
+      outpatient specialists, statisticians, economists, informaticists, data
+      scientists" -- the last four professions (statisticians, economists,
+      informaticists, data scientists) are the VIPER Act's Dec 2022 addition,
+      appended immediately before the statute's catch-all clause; everything
+      before them in the list reads as the pre-existing enumeration and is
+      treated as such here. See va_title38_hybrid_viper for the dated split.
+
+      Series matched: psychologists (0180), social workers (0185), general
+      health science (0601), dietitians (0630), occupational therapists (0631),
+      physical therapists (0633), pharmacists (0660), speech pathologists/
+      audiologists (0665), biomedical engineers (0858), practical/vocational
+      nurses (0620), nurse assistants (0621), diagnostic radiologic
+      technologists (0647), and medical technologists (0644). NOT MATCHED, for
+      lack of a verified OPM series code (not for lack of legal basis -- the
+      profession IS named in the statute): hearing aid specialists, respiratory
+      therapists, medical instrument technicians, medical records
+      administrators/specialists/technicians, dental hygienists/assistants,
+      nuclear medicine technologists, occupational therapy assistants,
+      kinesiotherapists, orthotist-prosthetists, pharmacy technicians, physical
+      therapy assistants, prosthetic representatives, marriage/family therapists,
+      licensed professional mental health counselors, blind rehabilitation
+      specialists/outpatient specialists. Guessing codes for these risked
+      corrupting the crosswalk, so they were left out rather than guessed. Their
+      individual addition dates within the statute's amendment history were not
+      independently researched -- all are treated as in effect for the full
+      accessions window (2005-present), which is safe unless any of them were
+      individually added to 7401(3) after 2005, which was not checked.
+    sql_predicate: >
+      substr(agency_code,1,2)='VA'
+      AND occupational_series_code IN
+        ('0180','0185','0601','0630','0631','0633','0660','0665','0858',
+         '0620','0621','0647','0644')
+      AND position_occupied='EXCEPTED SERVICE'
+
+  - id: va_title38_hybrid_viper
+    label: "VA hybrid title 38, VIPER Act additions (38 USC 7401(3))"
+    plain_label: "VA medical staff added by the VIPER Act"
+    confidence: confirmed
+    legal_basis: "38 U.S.C. 7401(3), as amended by the VIPER Act of 2021 (Pub. L. 117-328, Dec 2022)"
+    eligible_from: "2022-12"
+    sources:
+      - {cite: "38 U.S.C. 7401(3), current text", url: "https://www.law.cornell.edu/uscode/text/38/7401", verified: primary_text_read}
+      - {cite: "VIPER Act of 2021 (Pub. L. 117-328, Dec 2022) -- added statisticians/economists/informaticists/data scientists to 7401(3)",
+         url: "https://www.congress.gov/bill/117th-congress/house-bill/5721/text", verified: primary_doc_quoted_in_secondary}
+    preference_status: exempt_from_302
+    notes: >
+      Statisticians (1529/1530), economists (0110), data scientists (1560).
+      Informaticists also named in the amendment but no verified OPM series
+      code found. Gated to 2022-12 onward: before the VIPER Act, a VA
+      economist or statistician hired into excepted service was NOT a 7401(3)
+      appointee and should fall through to ordinary regime classification.
+      Empirically confirmed in this dataset: moving these series into this
+      channel post-2022 shifted %-excepted by +26pp with ~0pp change in
+      veteran share -- mechanics moved, preference did not.
+    sql_predicate: >
+      substr(agency_code,1,2)='VA'
+      AND occupational_series_code IN ('1530','1529','0110','1560')
+      AND position_occupied='EXCEPTED SERVICE'
+
+  - id: tsa_own_system
+    label: "TSA own personnel system"
+    plain_label: "TSA"
+    confidence: confirmed
+    legal_basis: "49 U.S.C. 44935(f)(2) (ATSA of 2001, Sec. 111)"
+    sources:
+      - {cite: "49 U.S.C. 44935(f)(2)", url: "https://www.law.cornell.edu/uscode/text/49/44935", verified: primary_text_read}
+    preference_status: applies_full
+    notes: >
+      TSA hires outside most of title 5 under its own statutory authority, but --
+      unlike CES -- explicitly APPLIES a veterans' preference.
+
+      VERIFIED DIRECTLY (2026-08-06, Cornell LII, current text), 44935(f)(2):
+      "Veterans preference.-- The Administrator shall provide a preference for the
+      hiring of an individual as a security screener if the individual is a member
+      or former member of the armed forces and if the individual is entitled,
+      under statute, to retired, retirement, or retainer pay on account of service
+      as a member of the armed forces." NOTE this is a NARROWER and more specific
+      preference than ordinary 5 USC 2108 preference -- it's keyed to entitlement
+      to retired/retirement/retainer pay, not to veteran status generally. TSA's
+      own careers materials additionally reference 5 USC 2108 as an alternate
+      preference-eligible definition (not independently verified against primary
+      text this pass) -- if accurate, TSA screeners may draw on BOTH standards.
+      Detection here is agency-wide; TSA has no meaningful ordinary-competitive-
+      service alternative to fall through to, so an agency-level match is a
+      reasonable proxy, though this was not empirically checked against the data
+      (e.g. by confirming TSA has no competitive-service GS/GG accessions that
+      would contradict it).
+    sql_predicate: "agency_subelement = 'TRANSPORTATION SECURITY ADMINISTRATION'"
+
+  - id: faa_own_system
+    label: "FAA own personnel system"
+    plain_label: "FAA"
+    confidence: confirmed
+    legal_basis: "49 U.S.C. 40122(g)(2)(B)"
+    sources:
+      - {cite: "49 U.S.C. 40122(g)(2)(B)", url: "https://www.law.cornell.edu/uscode/text/49/40122", verified: primary_text_read}
+    preference_status: applies_full
+    notes: >
+      FAA has run its own personnel management system outside most of title 5 since
+      1996.
+
+      40122(g)(1) establishes the personnel system itself; the preference
+      carve-out is at 40122(g)(2)(B): title 5 does not apply to FAA's personnel
+      system "with the exception of... sections 3304(f), to the
+      extent consistent with the Federal Aviation Administration's status as an
+      excepted service agency, 3308-3320, 3330a, 3330b, 3330c, and 3330d, relating
+      to veterans' preference." Same subsection also separately preserves
+      whistleblower protection (2302(b)), labor relations (ch. 71),
+      antidiscrimination (7204), suitability/security/conduct (ch. 73), injury
+      compensation (ch. 81), retirement/unemployment/insurance (ch. 83-85, 87, 89),
+      and MSPB appeal rights. Detection is agency-wide, same reasoning and same
+      caveat as TSA above (not empirically checked against the data for
+      counterexamples).
+    sql_predicate: "agency_subelement = 'FEDERAL AVIATION ADMINISTRATION'"
+
+  - id: fema_core_reservist
+    label: "FEMA CORE / Reservist (Stafford Act)"
+    plain_label: "FEMA disaster-response staff"
+    confidence: inferred  # outside-title-5 status confirmed; preference status NOT confirmed either way
+    legal_basis: "42 U.S.C. 5149(b)(1), (c) (Stafford Act, performance of services)"
+    sources:
+      - cite: "42 U.S.C. 5149(b)(1) -- \"to appoint and fix the compensation of such temporary personnel as may be necessary, without regard to the provisions of title 5 governing appointments in competitive service\""
+        url: "https://www.law.cornell.edu/uscode/text/42/5149"
+        verified: primary_text_read
+      - cite: "42 U.S.C. 5149(c) -- temporary FEMA personnel become career-conditional after 3 years' continuous service, considered in the same manner as competitive-service employees for transfer/reassignment/promotion"
+        url: "https://www.law.cornell.edu/uscode/text/42/5149"
+        verified: primary_text_read
+    preference_status: unknown
+    notes: >
+      CORE (Cadre of On-Call Response/Recovery Employees) and Reservist positions
+      are excluded from title 5 competitive-service appointment provisions under
+      42 USC 5149(b)(1), hired via a streamlined process, term-limited (2-4
+      years), with a path to career-conditional status after 3 years under
+      5149(c). No veterans'-preference-specific language was found in 5149 --
+      5149(d)(1) does apply USERRA reemployment rights (a different veteran
+      protection, about job restoration after military service, not selection
+      preference) to intermittent personnel appointed under (b)(1). Whether
+      ordinary selection preference is affirmatively excluded, exempt-from-302-
+      like, or simply not addressed by this section remains genuinely unknown.
+      Detection is a rough proxy (FEMA + emergency-management-adjacent series),
+      not a clean field match; FEMA also has ordinary title-5 competitive/
+      excepted staff who would be miscaught if this rule were broadened
+      further, so it is deliberately narrow.
+    sql_predicate: >
+      agency_subelement = 'FEDERAL EMERGENCY MANAGEMENT AGENCY'
+      AND occupational_series_code IN ('0089','0301')
+      AND position_occupied = 'EXCEPTED SERVICE'
+
+  - id: phs_fellows
+    label: "PHS fellows/special consultants (42 USC 209(f)/(g))"
+    plain_label: "Public Health Service fellows and special consultants"
+    confidence: confirmed
+    legal_basis: "42 U.S.C. 209(f), 209(g)"
+    eligible_from: "2015-01"  # pay_plan_code='RG' is 0 every year 2010-2014, first appears Jan 2015 (34, ramping to 176 by Jan 2017) -- confirmed by direct query, 2026-08-07. The 209(f)/(g) authority itself predates this window; only EHRI's use of 'RG' as its coded label does not. Pre-2015 PHS fellows were coded some other way -- NIH/FDA excepted-nonpermanent hires on pay_plan_code AD or EI are plausible candidates (spot-checked Jan 2012) but NOT confirmed, so no fallback match was added; EI in particular is already claimed by expert_consultant_3109 below, so guessing wrong here would silently misattribute records to the wrong authority rather than leave them honestly Unknown.
+    sources:
+      - cite: "42 U.S.C. 209(f) -- \"special consultants may be employed to assist and advise in the operations of the Service... appointed without regard to the civil-service laws\""
+        url: "https://www.law.cornell.edu/uscode/text/42/209"
+        verified: primary_text_read
+      - cite: "42 U.S.C. 209(g) -- individual scientists may be designated by the Surgeon General to receive fellowships, appointed for duty with the Service without regard to the civil-service laws"
+        url: "https://www.law.cornell.edu/uscode/text/42/209"
+        verified: primary_text_read
+      - cite: "42 U.S.C. 209(h) -- \"Persons who are not citizens may be employed as consultants pursuant to subsection (f) and may be appointed to fellowships pursuant to subsection (g)\""
+        url: "https://www.law.cornell.edu/uscode/text/42/209"
+        verified: primary_text_read
+    preference_status: outside_title5
+    notes: >
+      NIH/FDA postdoc-fellow channel. Draws on an international postdoctoral labor
+      market; observed veteran share ~0.6%, far below the same agencies' ordinary
+      GS competitive hiring (7-25%). Outside title 5; no appointment procedure to
+      apply preference to. Subsection (h) confirms the statute itself explicitly
+      authorizes hiring non-citizens under this authority, which is direct
+      statutory support for the international-labor-market explanation of the
+      low observed veteran share. pay_plan_code = 'RG' is EHRI's own coded label
+      for this authority, not an inference.
+    sql_predicate: "pay_plan_code = 'RG'"
+
+  - id: fdic_own_system
+    label: "FDIC own personnel system"
+    plain_label: "FDIC"
+    confidence: confirmed
+    legal_basis: "12 U.S.C. 1819, \"Fifth\""
+    sources:
+      - cite: "12 U.S.C. 1819, \"Fifth\" -- \"To appoint by its Board of Directors such officers and employees as are not otherwise provided for in this chapter, to define their duties, fix their compensation, require bonds of them and fix the penalty thereof, and to dismiss at pleasure such officers or employees.\""
+        url: "https://www.law.cornell.edu/uscode/text/12/1819"
+        verified: primary_text_read
+    preference_status: exempt_from_302
+    notes: >
+      1819's "Fifth" clause is a general corporate-powers grant to FDIC's Board
+      -- broad appointment, compensation, and at-will dismissal authority -- not
+      a preference-specific provision. No veterans'-preference language was
+      found in 1819 itself; exempt_from_302 here is a structural characterization
+      (FDIC as an independent agency with its own personnel authority, similar
+      in kind to the other own-system entries in this file) rather than a
+      directly quoted preference carve-out.
+    sql_predicate: "pay_plan_code = 'CG'"
+
+  - id: academy_faculty
+    label: "Service academy faculty"
+    plain_label: "Service academy faculty"
+    confidence: confirmed
+    legal_basis: "10 U.S.C. 1595; pay fixed under 10 USC 7438 (USMA) / 8452 (USNA) / 9438 (USAFA)"
+    sources:
+      - {cite: "10 U.S.C. 1595", url: "https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title10-section1595&num=0&edition=prelim",
+         verified: search_summary_only}
+      - cite: "10 U.S.C. 7438 (USMA civilian faculty: number; compensation)"
+        url: "https://www.law.cornell.edu/uscode/text/10/7438"
+        verified: primary_text_read
+        note: >
+          Verified 2026-08-06: "The Secretary of the Army may employ as many
+          civilians as professors, instructors, and lecturers at the Academy as
+          the Secretary considers necessary... The compensation of persons
+          employed under this section is as prescribed by the Secretary" --
+          outside 5 USC subchapter V of chapter 55 and section 6101.
+      - cite: "10 U.S.C. 8452 (USNA civilian teachers: number; compensation) -- \"The Secretary of the Navy may employ as many civilians as professors, instructors, and lecturers at the Naval Academy as he considers necessary... compensation... as prescribed by the Secretary\", same 5 USC ch. 55/6101 exception structure as 7438"
+        url: "https://www.law.cornell.edu/uscode/text/10/8452"
+        verified: primary_text_read
+      - cite: "10 U.S.C. 9438 (USAFA civilian faculty: number; compensation) -- identical structure and near-identical wording to 7438/8452, Secretary of the Air Force"
+        url: "https://www.law.cornell.edu/uscode/text/10/9438"
+        verified: primary_text_read
+    preference_status: outside_title5
+    notes: >
+      Civilian professors/instructors/lecturers at USMA/USNA/USAFA/Naval Postgraduate
+      School. Compensation and appointment set by the Secretary of Defense outside
+      title 5 classification. Observed veteran share (~25-36%) is ABOVE the
+      government-wide baseline -- retired-officer PhDs are a real feeder pipeline
+      here, so escaping the process did not exclude veterans.
+    sql_predicate: >
+      agency_subelement IN
+        ('U.S. MILITARY ACADEMY','U.S. AIR FORCE ACADEMY','U.S. NAVAL ACADEMY','NAVAL POSTGRADUATE SCHOOL')
+      AND pay_plan_code = 'AD'
+      AND appointment_type LIKE '%SCHEDULE A%'
+
+  - id: dod_ces_inferred
+    label: "DoD Cyber Excepted Service (inferred detection, confirmed preference status)"
+    plain_label: "DoD cyber workforce"
+    confidence: inferred  # detection rule (DoD+excepted+GG) is still a heuristic proxy, not a confirmed field
+    legal_basis: "10 U.S.C. 1599f; DoD Cyber Excepted Service FAQ, Q17"
+    eligible_from: "2017-08"  # CES FAQ Q5: implementation and hiring began Aug 2017 with Phase 1 orgs
+    sources:
+      - cite: "10 U.S.C. 1599f(a)(1)(B) -- the Secretary may \"appoint an individual to a qualified position (after taking into consideration the availability of preference eligibles for appointment to the position)\""
+        url: "https://www.law.cornell.edu/uscode/text/10/1599f"
+        verified: primary_text_read
+      - cite: "DoD Cyber Excepted Service, Frequently Asked Questions (DCPAS, 1 Jan 2018), Q17 -- \"CES does not apply to 5 or 10-point veterans' preference. Only veterans' preference-eligible candidates with a Military Service-connected disability of 30 percent or more will be specifically identified and documented, if a CES position is opened to external sources.\""
+        url: "https://dl.dod.cyber.mil/wp-content/uploads/dces/pdf/GeneralCESFAQs.pdf"
+        verified: primary_text_read
+    preference_status: not_preference_eligible
+    notes: >
+      DETECTION is inferred -- DoD + excepted service + GG pay plan is
+      consistent with CES but not exclusive to it; no field confirms CES
+      specifically.
+
+      The PREFERENCE STATUS rests on two sources that say different things.
+      The authorizing statute itself, 1599f(a)(1)(B), only requires the
+      Secretary to appoint "after taking into consideration the availability
+      of preference eligibles" -- a softer, consideration-based standard, not
+      mechanical ranking but also not silence. The implementing FAQ, Q17,
+      states the stronger operational rule actually followed: ordinary 5/10-
+      point preference does not apply at all; only 30%+ disabled veterans get
+      identification/documentation, not a selection guarantee. This entry uses
+      the FAQ's stronger, more specific, more recent (2018 vs. the statute's
+      2016 enactment) reading.
+
+      Separately, the FAQ (Q7-Q9) describes CES conversion as largely a
+      voluntary reclassification of sitting GS incumbents to GG "as-is" (no
+      change in duties/grade) -- so much CES growth may not generate accession
+      records at all. The 53%+ veteran share observed in this bucket is more
+      likely explained by new external hires into already-CES-designated
+      positions (which would show as ordinary accessions) than by conversions,
+      and by CES orgs (Cyber Command, DISA, Service Cyber Components) sitting
+      inside a heavily military-fed talent pool. dha_authorities' Z5CL entry is
+      a DoD cyber-workforce DHA explicitly meant as a bridge into CES -- a
+      component that has completed its CES transition may route these same
+      positions through this regime instead of Z5CL.
+    sql_predicate: >
+      substr(agency_code,1,2) IN ('AF','AR','NV','DD')
+      AND position_occupied = 'EXCEPTED SERVICE'
+      AND pay_plan_code = 'GG'
+
+  - id: attorney_302_exemption
+    label: "Attorney positions (302.101(c)(8))"
+    plain_label: "Attorneys"
+    confidence: confirmed
+    legal_basis: "5 CFR 302.101(c)(8)"
+    sources:
+      - {cite: "5 CFR 302.101(c)(8)", url: "https://www.law.cornell.edu/cfr/text/5/302.101", verified: primary_text_read}
+      - {cite: "5 CFR 213.3102(d) (\"Attorneys.\") -- the Schedule A basis attorneys are actually appointed under", url: "https://www.law.cornell.edu/cfr/text/5/213.3102", verified: primary_text_read}
+    preference_status: exempt_from_302
+    notes: >
+      The only occupation named outright on the 302.101(c) exempt list (vs. category-
+      based exemptions like Schedule C or disability). Preference degrades to a
+      "positive factor... as far as administratively feasible" (5 CFR 302.101(c)'s
+      own closing sentence); no ranking/points/pass-over procedure applies. Series
+      0904 (Law Clerk) included as a closely-related excepted-attorney-track series.
+    sql_predicate: >
+      occupational_series_code IN ('0904','0905')
+      AND position_occupied = 'EXCEPTED SERVICE'
+
+  - id: schedule_c_political
+    label: "Schedule C (political)"
+    plain_label: "Political appointees (Schedule C)"
+    confidence: confirmed
+    legal_basis: "5 CFR 213.3301; 302.101(c)(7)"
+    sources:
+      - {cite: "5 CFR 302.101(c)(7)", url: "https://www.law.cornell.edu/cfr/text/5/302.101", verified: primary_text_read}
+      - cite: "5 CFR 213.3301 -- \"positions... of a confidential or policy-determining character... normally subject to change as a result of a Presidential transition... excepted from the competitive service and constitute Schedule C\""
+        url: "https://www.law.cornell.edu/cfr/text/5/213.3301"
+        verified: primary_text_read
+    preference_status: exempt_from_302
+    sql_predicate: "appointment_type LIKE '%SCHEDULE C%'"
+
+  - id: ses_noncareer
+    label: "SES noncareer (political)"
+    plain_label: "Senior Executive Service, political"
+    confidence: confirmed
+    legal_basis: "5 U.S.C. 2108(3)"
+    sources:
+      - {cite: "5 U.S.C. 2108(3)", url: "https://www.law.cornell.edu/uscode/text/5/2108", verified: primary_text_read}
+    preference_status: not_preference_eligible
+    sql_predicate: >
+      position_occupied = 'SES GENERAL' AND appointment_type LIKE '%NONCAREER%'
+
+  - id: ses_career_or_limited
+    label: "SES career/limited"
+    plain_label: "Senior Executive Service, career"
+    confidence: confirmed
+    legal_basis: "5 U.S.C. 2108(3)"
+    sources:
+      - {cite: "5 U.S.C. 2108(3)", url: "https://www.law.cornell.edu/uscode/text/5/2108", verified: primary_text_read}
+    preference_status: not_preference_eligible
+    sql_predicate: "position_occupied LIKE 'SES%'"
+
+  - id: senior_executive_pay_plan
+    label: "Senior/executive pay plan (EX/ES/SL/ST)"
+    plain_label: "Other senior and executive pay plans"
+    confidence: confirmed
+    legal_basis: "5 U.S.C. 2108(3); various"
+    sources:
+      - {cite: "5 U.S.C. 2108(3)", url: "https://www.law.cornell.edu/uscode/text/5/2108", verified: primary_text_read}
+    preference_status: not_preference_eligible
+    sql_predicate: "pay_plan_code IN ('EX','ES','SL','ST')"
+
+  - id: expert_consultant_3109
+    label: "5 USC 3109 expert/consultant/advisory"
+    plain_label: "Paid experts and consultants"
+    confidence: confirmed
+    legal_basis: "5 U.S.C. 3109"
+    sources:
+      - cite: "5 U.S.C. 3109(b) -- an agency head \"may procure by contract the temporary (not in excess of 1 year) or intermittent services of experts or consultants... without regard to (1) the provisions of this title governing appointment in the competitive service\""
+        url: "https://www.law.cornell.edu/uscode/text/5/3109"
+        verified: primary_text_read
+    preference_status: outside_title5
+    notes: >
+      A contract for services, not an appointment -- "without regard to" title
+      5 competitive-appointment provisions by the statute's own terms, so no
+      preference procedure applies.
+    sql_predicate: "pay_plan_code IN ('EE','ED','EF','EI')"
+
+  - id: pathways_pmf
+    label: "Pathways -- Presidential Management Fellows"
+    plain_label: "Presidential Management Fellows"
+    confidence: confirmed
+    legal_basis: "5 CFR Part 362, Subpart D; 5 CFR 362.105(c)(2)"
+    sources:
+      - cite: "5 CFR 362.105(c)(2) -- \"Agencies must follow the procedures of part 302 of this chapter when filling a position under a Pathways Program.\""
+        url: "https://www.law.cornell.edu/cfr/text/5/362.105"
+        verified: primary_text_read
+    preference_status: applies_full
+    notes: "Preference required by regulation, applied per Part 302 procedures."
+    sql_predicate: "appointment_type LIKE '%SCHEDULE D%' AND pathways_group = 'PMF'"
+
+  - id: pathways_other
+    label: "Pathways -- Intern/Student Trainee/Recent Graduate"
+    plain_label: "Interns, student trainees, and recent graduates"
+    confidence: confirmed
+    legal_basis: "5 CFR Part 362; 5 CFR 362.105(c)(2)"
+    sources:
+      - cite: "5 CFR 362.105(c)(2) -- \"Agencies must follow the procedures of part 302 of this chapter when filling a position under a Pathways Program.\""
+        url: "https://www.law.cornell.edu/cfr/text/5/362.105"
+        verified: primary_text_read
+    preference_status: applies_full
+    sql_predicate: "appointment_type LIKE '%SCHEDULE D%' OR pathways_group IS NOT NULL"
+
+  - id: demo_project_competitive
+    label: "Demonstration project / STRL / AcqDemo, competitive service"
+    plain_label: "Research-lab and acquisition demonstration projects"
+    confidence: confirmed  # the pay-plan/service-type detection is solid; the preference_status claim below is weaker than it was
+    legal_basis: "5 U.S.C. 4703; NDAA FY1995 Sec. 342 (STRLs); AcqDemo"
+    sources:
+      - cite: "5 U.S.C. 4703(a) -- OPM \"may... conduct and evaluate demonstration projects\" not limited by title 5 provisions relating to \"(1) the methods of establishing qualification requirements for, recruitment for, and appointment to positions; (2) the methods of classifying positions and compensating employees...\" (list continues through (8))"
+        url: "https://www.law.cornell.edu/uscode/text/5/4703"
+        verified: primary_text_read
+      - {cite: "NDAA FY1995 Sec. 342 (Public Law 103-337, STRL demonstration projects)", url: null, verified: search_summary_only}
+      - {cite: "MSPB, DHA research brief (Feb 2021) -- DoD Laboratory Demonstration Project DHA = 14% of all DHA appointments FY2014-2018",
+         url: "https://www.mspb.gov/studies/researchbriefs/Direct_Hire_Authority_Under_5_USC_%C2%A7_3304_Usage_and_Outcomes_1803830.pdf",
+         verified: primary_text_read}
+    preference_status: applies_full  # may silently contain DHA-waived hires -- see note
+    notes: >
+      Agency owns qualification standards, classification, and pay under these
+      authorities. 4703(a)'s list of what demo projects may waive does not
+      include veterans' preference by name -- qualification/recruitment/
+      appointment methods, classification, compensation, assignment,
+      discipline, incentives, hours, and RIF methods are all listed;
+      preference is not. Empirically confirmed near-identical veteran share to
+      GS/GG competitive hiring in the same series/office across every demo-pay
+      series tested.
+
+      One complication: DoD labs use direct-hire as part of their
+      demonstration projects, not instead of them (MSPB source above). A
+      demo-pay hire in this bucket could be an ordinary demo-project
+      competitive hire (preference intact) or a DHA-waived hire made inside
+      that same lab's demo project -- nothing in this dataset distinguishes
+      the two. The near-identical veteran share is consistent with either
+      "demo projects don't affect preference" or "DHA-within-demo doesn't
+      suppress veteran hiring either" (which is the pattern in every other DHA
+      finding in this file) -- cannot separate these explanations here.
+      Pay-plan codes: ND, NH, NO, NT, DB, DP, DR, DE, DS, ZP, ZA, ZS, ZT, IM,
+      IA, NK.
+    sql_predicate: >
+      position_occupied = 'COMPETITIVE SERVICE'
+      AND pay_plan_code IN
+        ('ND','NH','NO','NT','DB','DP','DR','DE','DS','ZP','ZA','ZS','ZT','IM','IA','NK')
+
+  - id: schedule_b_unknown_subtype
+    label: "Schedule B (subtype unknown)"
+    plain_label: "Schedule B, specific authority unidentified"
+    confidence: inferred
+    legal_basis: "5 CFR 213.3202"
+    sources:
+      - {cite: "5 CFR 213.3202", url: "https://www.law.cornell.edu/cfr/text/5/213.3202", verified: primary_text_read}
+    preference_status: unknown
+    notes: >
+      213.3202 is a long list of narrow, named sub-authorizations (SES
+      candidate-development positions at (j), SES break-in-service
+      reappointment at (m), and many more not individually reviewed here) --
+      genuinely a mixed bag, subtype not distinguishable from appointment_type
+      alone. Does NOT include VRA (see known_gaps.vra_veoa_blind_spot -- VRA is
+      a competitive-service authority under 5 CFR 307.101, not Schedule B).
+      Observed veteran share (~22%) is close to the government-wide baseline.
+    sql_predicate: "appointment_type LIKE '%SCHEDULE B%'"
+
+  - id: schedule_a_unknown_subtype
+    label: "Schedule A (subtype unknown)"
+    plain_label: "Schedule A, specific authority unidentified"
+    confidence: residual
+    legal_basis: "5 CFR 213.3102 (multiple paragraphs; subtype not distinguishable)"
+    sources:
+      - {cite: "5 CFR 213.3102", url: "https://www.law.cornell.edu/cfr/text/5/213.3102", verified: primary_text_read}
+    preference_status: unknown
+    notes: "See known_gaps.schedule_a_subtype_blind_spot."
+    sql_predicate: "appointment_type LIKE '%SCHEDULE A%'"
+
+  - id: ordinary_competitive_permanent
+    label: "Ordinary competitive GS/GG, permanent"
+    plain_label: "Ordinary permanent competitive-service hires"
+    confidence: residual
+    legal_basis: "5 U.S.C. 3309-3318 (nominal default)"
+    sources:
+      - cite: "5 U.S.C. 3309 -- \"A preference eligible who receives a passing grade in an examination for entrance into the competitive service is entitled to additional points above his earned rating\""
+        url: "https://www.law.cornell.edu/uscode/text/5/3309"
+        verified: primary_text_read
+    preference_status: applies_full
+    notes: >
+      Largest single bucket. "applies_full" here means "no exemption was detected,"
+      NOT "confirmed full mechanical preference was in effect" -- see
+      known_gaps.dha_blind_spot. Direct-hire authority usage is invisible inside
+      this bucket, and so is VRA (5 CFR 307.101 appoints VRA hires "to positions
+      in the competitive service... without regard to the competitive examining
+      system" -- see known_gaps.vra_veoa_blind_spot): a VRA hire is a
+      competitive-service appointment that bypasses examining, and would show
+      up here indistinguishably from an ordinary examined hire.
+    sql_predicate: >
+      position_occupied = 'COMPETITIVE SERVICE'
+      AND pay_plan_code IN ('GS','GG')
+      AND appointment_type NOT LIKE '%NONPERMANENT%'
+
+  - id: competitive_nonpermanent_or_other_pay
+    label: "Competitive service, nonpermanent or other pay plan"
+    plain_label: "Temporary or non-GS competitive-service hires"
+    confidence: residual
+    legal_basis: "5 U.S.C. 3309-3318 (nominal default)"
+    sources:
+      - cite: "5 U.S.C. 3309 -- \"A preference eligible who receives a passing grade in an examination for entrance into the competitive service is entitled to additional points above his earned rating\""
+        url: "https://www.law.cornell.edu/uscode/text/5/3309"
+        verified: primary_text_read
+    preference_status: applies_full
+    notes: "Same VRA caveat as ordinary_competitive_permanent above."
+    sql_predicate: "position_occupied = 'COMPETITIVE SERVICE'"
+
+  - id: other_excepted_unidentified
+    label: "Other excepted service, authority unidentified"
+    plain_label: "Other excepted service, authority unidentified"
+    confidence: residual
+    legal_basis: null
+    sources: []
+    preference_status: unknown
+    notes: >
+      Catch-all -- DO NOT treat as exempt_from_302. Per 5 CFR 302.101(c), agencies
+      filling excepted positions not otherwise covered by Part 302 must follow
+      preference "as far as administratively feasible," which would make this
+      exempt-from-302-like IF that were the only authority in play -- but this
+      bucket almost certainly also contains VEOA, DHS CTMS, and other named
+      statutory authorities (some of which apply FULL preference, e.g. VEOA)
+      that this crosswalk has no field to detect. (VRA is a competitive-service
+      authority, not excepted service -- see known_gaps.vra_veoa_blind_spot --
+      so it hides in the competitive-service buckets, not here.) It is 80%+ of
+      everything that would otherwise be tagged exempt_from_302 by hire count,
+      so mislabeling it there would badly overstate confidence in any
+      preference_status rollup. Genuinely unknown.
+    sql_predicate: "TRUE"  # fallback / else clause
+
+# =============================================================================
+# DHA authorities: government-wide + DoD-specific direct-hire authorities, by
+# occupational series and grade (+ agency, for DoD-specific ones). See the file
+# header above for how this section is used alongside `regimes`.
+#
+# DHA waives 5 U.S.C. 3309-3318 (points, ranking, rule of three) for the covered
+# competitive-service appointments. It does NOT change service type, pay plan, or
+# appointment type -- a DHA hire is recorded identically to an ordinary competitive
+# appointment in the public EHRI accessions data. This section makes DHA-eligibility
+# (not DHA-usage) explicit and joinable against accessions by series + grade + date,
+# so it can be cross-tabulated against the `regimes` buckets above rather than
+# silently hidden inside them.
+#
+# IMPORTANT: eligible =/= used. An agency may have a DHA-eligible position and still
+# fill it through ordinary delegated examining. This section establishes the ceiling
+# on how much of a bucket COULD have bypassed mechanical preference, not how much did.
+# Every government-wide source memo states explicitly that veterans' preference
+# eligibles should still be selected as found among the qualified pool -- DHA removes
+# RANKING, not preference consideration. See dha_notes_on_preference_under_dha below.
+#
+# Top-level `source` on each authority below is the primary document; per-series
+# `note` fields add anything specific to that series. All were fetched and read
+# directly (verified: primary_text_read at the authority level) except where noted.
+# =============================================================================
+
+dha_authorities:
+  - id: GW-001
+    label: "Medical Occupations government-wide DHA"
+    sf50_codes: {primary: AYM, secondary: BAB}
+    scope: government-wide (all agencies, all grade levels, all locations)
+    issued: "2003-06-20"
+    expires: null
+    source:
+      cite: "OPM, \"Direct Hire Authority\" (live listing page)"
+      url: "https://www.opm.gov/policy-data-oversight/hiring-information/direct-hire-authority/"
+      verified: primary_text_read
+      fetched: "2026-08-06"
+    covered_series:
+      - {series: "0647", title: "Diagnostic Radiologic Technologist", grades: "all", eligible_from: "2003-06-20"}
+      - {series: "0602", title: "Medical Officer",                    grades: "all", eligible_from: "2003-06-20"}
+      - {series: "0610", title: "Nurse",                                grades: "all", eligible_from: "2003-06-20"}
+      - {series: "0620", title: "Practical Nurse",                      grades: "all", eligible_from: "2003-06-20"}
+      - {series: "0660", title: "Pharmacist",                            grades: "all", eligible_from: "2003-06-20"}
+    cybersecurity_coding_required: false
+    notes: >
+      Applies to GS/GG competitive-service appointments in these series. Does NOT
+      apply to VA's title-38 or hybrid-title-38 appointments (0602/0610/0660 at VA
+      are overwhelmingly excepted-service, non-GS, appointed under 38 USC 7401 --
+      a different legal basis entirely, outside this DHA's scope; see this file's
+      va_title38_pure / va_title38_hybrid regime entries above). Mainly relevant to
+      non-VA medical hiring on the GS scale (NIH, FDA, BOP, IHS, DoD military
+      treatment facilities where appointments run through title 5).
+
+  - id: GW-002
+    label: "IT Management (Information Security) government-wide DHA"
+    sf50_codes: {primary: AYM, secondary: BAC}
+    scope: government-wide (all agencies, all locations)
+    issued: "2003-06-20"
+    expires: null
+    source:
+      cite: "OPM, \"Direct Hire Authority\" (live listing page)"
+      url: "https://www.opm.gov/policy-data-oversight/hiring-information/direct-hire-authority/"
+      verified: primary_text_read
+      fetched: "2026-08-06"
+    covered_series:
+      - series: "2210"
+        title: "Information Technology Management (Information Security)"
+        grades: "09-99"
+        eligible_from: "2003-06-20"
+        note: >
+          OPM's page states "GS-2210, GS-9 and above" with no stated upper bound --
+          treated here as GS-09 through GS-15 (top of GS scale). This entirely
+          subsumes GW-008's 2210 coverage (GS-12-15) and extends it down to GS-09-11.
+          The parenthetical "(Information Security)" in the authority's own title is
+          a scope limiter, but unlike GW-008/GW-009 no explicit "majority of the
+          time" percentage-of-work footnote is stated in the current source text for
+          this specific (2003-vintage) authority. Treated as conditional here out of
+          caution, consistent with how GW-008/GW-009 treat 2210 -- but this is a
+          judgment call, not a quoted condition, and should be revisited if the
+          original 2003 approval memo (not located in this research pass) states
+          something more precise.
+    cybersecurity_coding_required: true  # judgment call -- see note above
+
+  - id: GW-006
+    label: "Veterinary Medical Officer government-wide DHA"
+    sf50_codes: {primary: AYM, secondary: BAG}
+    scope: "government-wide, nationwide including PR/Guam/USVI"
+    issued: "2009-02-12"
+    expires: null
+    source:
+      cite: "OPM, \"Direct Hire Authority\" (live listing page)"
+      url: "https://www.opm.gov/policy-data-oversight/hiring-information/direct-hire-authority/"
+      verified: primary_text_read
+      fetched: "2026-08-06"
+    covered_series:
+      - {series: "0701", title: "Veterinary Medical Officer", grades: "11-15", eligible_from: "2009-02-12"}
+    cybersecurity_coding_required: false
+
+  - id: GW-007
+    label: "STEM and Acquisitions government-wide DHA"
+    sf50_codes: {primary: AYM, secondary: BAH}
+    scope: government-wide (all agencies, all locations)
+    issued: "2018-10-11"
+    amended: "2024-09-23"
+    expires: "2028-12-31 or until OPM terminates, whichever first"
+    source:
+      cite: "OPM CHCO memo, \"Announcing Government-wide Direct Hire Appointing Authorities\" (2018-10-11); amended by \"Extension and Amendment...\" (2024-09-23); current text also on OPM's live DHA listing page"
+      url: "https://www.opm.gov/chcoc/transmittals/2018/announcing-government-wide-direct-hire-appointing-authorities_10-11-2018_508.pdf"
+      url_2024_amendment: "https://www.opm.gov/chcoc/transmittals/2024/9-23-2024%20Governmentwide%20DHA%20STEM%20Cyber%20Extension%20and%20Amendment%20CHCO%20Memo.pdf"
+      url_current: "https://www.opm.gov/policy-data-oversight/hiring-information/direct-hire-authority/"
+      verified: primary_text_read
+    covered_series:
+      - {series: "0110", title: "Economist",        grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "0401", title: "Biological Science", grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "0482", title: "Fishery Biologist",  grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "0801", title: "General Engineer",   grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "0810", title: "Civil Engineer",      grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1301", title: "Physical Sciences",   grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1306", title: "Physical Sciences (health physics)", grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1310", title: "Physics",             grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1320", title: "Chemistry",           grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1510", title: "Actuary",              grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1520", title: "Mathematics",           grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1529", title: "Mathematical Statistician", grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1530", title: "Statistician",          grades: "11-15", eligible_from: "2018-10-11"}
+      - {series: "1102", title: "Acquisitions/Contracting", grades: "11-15", eligible_from: "2018-10-11"}
+      - series: "1515"
+        title: "Operations Research"
+        grades: "11-15"
+        eligible_from: "2023-09-29"
+        note: >
+          Not in the 2018 table; present on the current listing page and in the
+          2024 memo. Exact date added is not confirmed -- 2023-09-29 (the amendment
+          date referenced in the 2024 memo's text) used as the latest-possible bound.
+      - series: "1560"
+        title: "Data Science"
+        grades: "11-15"
+        eligible_from: "2023-09-29"
+        note: >
+          Series 1560 did not exist government-wide until ~2021-2022. Not in the
+          2018 table; present on the current page. Treat eligible_from as an upper
+          bound, not a confirmed start date.
+    cybersecurity_coding_required: false
+
+  - id: GW-008
+    label: "Cybersecurity and related government-wide DHA"
+    sf50_codes: {primary: AYM, secondary: BAI}
+    scope: government-wide (all agencies, all locations)
+    issued: "2018-10-11"
+    amended: "2024-09-23"
+    expires: "2028-12-31 or until OPM terminates, whichever first"
+    source:
+      cite: "OPM CHCO memo, \"Announcing Government-wide Direct Hire Appointing Authorities\" (2018-10-11); amended by \"Extension and Amendment...\" (2024-09-23); current text also on OPM's live DHA listing page"
+      url: "https://www.opm.gov/chcoc/transmittals/2018/announcing-government-wide-direct-hire-appointing-authorities_10-11-2018_508.pdf"
+      url_2024_amendment: "https://www.opm.gov/chcoc/transmittals/2024/9-23-2024%20Governmentwide%20DHA%20STEM%20Cyber%20Extension%20and%20Amendment%20CHCO%20Memo.pdf"
+      url_current: "https://www.opm.gov/policy-data-oversight/hiring-information/direct-hire-authority/"
+      verified: primary_text_read
+    covered_series:
+      - {series: "0854", title: "Computer Engineer (Cybersecurity)", grades: "12-15", eligible_from: "2018-10-11",
+         cybersecurity_coding_required: false}
+      - {series: "1550", title: "Computer Scientist (Cybersecurity)", grades: "12-15", eligible_from: "2018-10-11",
+         cybersecurity_coding_required: false}
+      - {series: "0855", title: "Electronics Engineer (Cybersecurity)", grades: "12-15", eligible_from: "2018-10-11",
+         cybersecurity_coding_required: false}
+      - series: "2210"
+        title: "IT Cybersecurity Specialist"
+        grades: "12-15"
+        eligible_from: "2018-10-11"
+        cybersecurity_coding_required: true
+        note: >
+          Eligibility CONDITIONAL on NICE-framework cybersecurity coding, majority
+          of time. Not present anywhere in public accessions data --
+          stem_occupation_type is a static per-series tag, not a per-position code.
+          Also overlaps entirely with GW-002's broader GS-09-15 coverage of 2210.
+      - series: "1811"
+        title: "Criminal Investigator (Cybersecurity)"
+        grades: "12-15"
+        eligible_from: "2024-09-23"
+        cybersecurity_coding_required: true
+        note: "Same conditional coding requirement and same blind spot as GS-2210 above."
+
+  - id: GW-009
+    label: "Artificial Intelligence government-wide DHA"
+    sf50_codes: {primary: AYM, secondary: BAJ}
+    scope: government-wide (all agencies, all locations)
+    issued: "2023-12-29"
+    expires: "2028-12-31 or until OPM terminates, whichever first"
+    legal_basis: "Issued in support of EO 14110 (AI in Government)"
+    source:
+      cite: "OPM, \"Direct Hire Authority\" (live listing page)"
+      url: "https://www.opm.gov/policy-data-oversight/hiring-information/direct-hire-authority/"
+      verified: primary_text_read
+      fetched: "2026-08-06"
+    covered_series:
+      - series: "2210"
+        title: "Information Technology Specialist (AI)"
+        grades: "09-15"
+        eligible_from: "2023-12-29"
+        cybersecurity_coding_required: true  # here: AI-work-coding, not cyber -- reusing the flag name for "conditional, uncodeable in EHRI"
+        note: >
+          Conditional on AI-related work per the AI in Government Act of 2020
+          competencies (OPM, July 2023). No per-position AI-coding field exists in
+          accessions data. Overlaps with GW-002 (all of 2210 GS-09-15) and GW-008
+          (2210 GS-12-15) -- at GS-12-15, a 2210 position could be DHA-eligible
+          under any of THREE authorities depending on whether the work is
+          security-coded, AI-coded, or covered by GW-002's broader (also
+          conditional) info-security scope. apply_crosswalk.py does not attempt to
+          distinguish which; it reports whichever authority is checked first (see
+          that script's docstring on tier-sorted first-match).
+      - series: "1550"
+        title: "Computer Scientist (Artificial Intelligence)"
+        grades: "09-15"
+        eligible_from: "2023-12-29"
+        cybersecurity_coding_required: true
+        note: "AI-work conditional, same blind spot. Overlaps GW-008's unconditional 12-15 coverage for grades 12-15; adds conditional 09-11 coverage."
+      - series: "0854"
+        title: "Computer Engineer (Artificial Intelligence)"
+        grades: "09-15"
+        eligible_from: "2023-12-29"
+        cybersecurity_coding_required: true
+        note: "AI-work conditional, same blind spot. Overlaps GW-008's unconditional 12-15 coverage for grades 12-15; adds conditional 09-11 coverage."
+      - series: "0343"
+        title: "Management and Program Analyst (Artificial Intelligence)"
+        grades: "09-15"
+        eligible_from: "2023-12-29"
+        cybersecurity_coding_required: true
+        note: >
+          One of two DHAs found touching 0343 in this research pass (see also
+          Z5CL below, DoD-only, broader and older). Ordinary 0343 hiring (the vast
+          majority of it -- see the va_title38_hybrid and other regime notes above
+          on 0343 as a soft-qualification, high-veteran-share series) has NO
+          government-wide DHA at all outside these two narrow, conditional
+          carve-outs. Same per-position blind spot: cannot tell which 0343 hires,
+          if any, meet the AI-work definition.
+
+  - id: Z5CL
+    label: "DoD Cyber Workforce Direct Hiring Authority"
+    sf50_codes: {primary: null, secondary: null, legal_authority_code: Z5CL}
+    scope: "DoD only (agency_scope: dod)"
+    agency_scope: dod
+    issued: "2017-08-22"
+    legal_basis: "Sec. 1643(a)(3), NDAA for FY 2017 (Pub. L. 114-328)"
+    source:
+      cite: "OSD Memorandum, \"Direct Hiring Authority for Cyber Workforce Positions\" (22 Aug 2017, A.M. Kurta, PDUSD(P&R))"
+      url: "https://dl.dod.cyber.mil/wp-content/uploads/dces/pdf/DHA_CyberWorkforcePositions.pdf"
+      verified: primary_text_read
+    notes: >
+      DoD-SPECIFIC, not government-wide -- separate from and larger in scale
+      (per MSPB) than GW-007/008/009. Authorized "until the Department completes
+      implementation of the authority in section 1599f of title 10... to
+      establish a cyber excepted service" -- i.e. explicitly a BRIDGE authority
+      pending CES rollout. Its currently-active scope for any given DoD
+      component in 2024-2026 is therefore uncertain: a component that has
+      completed its CES transition may no longer use Z5CL for these positions at
+      all, having moved them into CES (10 U.S.C. 1599f) instead, which itself
+      does NOT apply ordinary point veterans' preference (see this file's
+      dod_ces_inferred regime entry above). Coded here anyway because it is real,
+      dated, and DoD-wide, and because some components may still be mid-transition
+      or using it for positions not yet moved into CES. Covers cyber workforce
+      positions up to GS-15 (or equivalent), delegated to Secretaries of the
+      Military Departments and Directors of Defense Agencies/Field Activities.
+    covered_series:
+      # Part A: eligible for immediate use, no additional coding condition
+      - {series: "0391", title: "Telecommunications",       grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      - {series: "1550", title: "Computer Science",           grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      - {series: "0850", title: "Electrical Engineering",     grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      - {series: "0854", title: "Computer Engineering",       grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      - {series: "0855", title: "Electronics Engineering",    grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      - {series: "0856", title: "Electronics Technical",      grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      - {series: "2210", title: "IT Management",               grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: false}
+      # Part B: requires assigned cyber work-role code(s) per the Federal Cybersecurity
+      # Workforce Assessment Act of 2015 and the DoD Cyber Workforce Framework -- same
+      # kind of per-position blind spot as GW-008/009's cyber/AI conditions above.
+      - series: "0080"
+        title: "Security Administration"
+        grades: "all"
+        eligible_from: "2017-08-22"
+        cybersecurity_coding_required: true
+        note: "Part B -- requires assigned cyber work-role code(s); not detectable per-position in accessions data."
+      - {series: "0201", title: "Human Resources",             grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "0301", title: "Miscellaneous Administration & Program", grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "0340", title: "Program Management",         grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "0343", title: "Management and Program Analysis", grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "0801", title: "General Engineering",         grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1101", title: "General Business and Industry", grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1515", title: "Operations Research",         grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1520", title: "Mathematics",                  grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1701", title: "General Education & Training", grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1712", title: "Training Instruction",        grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1801", title: "General Inspection, Investigation, Enforcement & Compliance", grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1805", title: "Investigative Analysis",       grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+      - {series: "1811", title: "Criminal Investigation",       grades: "all", eligible_from: "2017-08-22", cybersecurity_coding_required: true}
+
+dha_not_found_on_current_page:
+  - GW-003
+  - GW-004  # possibly the 2012 NDAA Sec. 1103 acquisition authority referenced in
+            # some secondary sources; relationship to GW-007's 1102 coverage unconfirmed
+  - GW-005
+
+dha_not_covered_here:
+  - description: >
+      Agency-specific direct-hire authorities (as distinct from government-wide).
+      These are the majority of actual DHA usage and are not on the government-wide
+      listing page at all -- each is its own Federal Register notice or CHCO memo,
+      scoped to one agency + series + grade + date range. VA, DHS/CBP, SSA, and IRS
+      are large enough employers in this dataset that agency-specific grants there
+      could matter more in volume than everything in this file combined. Not
+      researched in this pass. Also unresearched: ~19 of DoD's ~20 other
+      NDAA-derived DHAs beyond Z5CL (named leads found but not verified: NDAA FY16
+      Sec. 1112/1113 for technical acquisition positions, NDAA FY17 Sec. 1110 as
+      amended by FY18 Sec. 1106 for financial management experts), and DoD
+      Laboratory Demonstration Project DHA (Public Law 103-337) -- see
+      known_gaps.dha_true_scale_likely_much_larger_than_measured.
+
+dha_schedule_policy_career_note: >
+  Deliberately excluded from this crosswalk. As of mid-2026, OPM's implementation
+  targets ~8,000 positions government-wide, ~97% of them at or above GS-15, following
+  the EO signed June 2026. Designation is a reclassification of an existing
+  incumbent's position, not typically a new-hire action -- so it should generate
+  little to no accession volume regardless of eventual scale. Not worth a
+  position-list join against accessions data at this time; revisit if that changes.
+
+dha_notes_on_preference_under_dha: >
+  Both the 2018 and 2024 STEM/cyber memos state explicitly: "Qualified candidates
+  with veterans' preference should be selected as they are found, just as any
+  qualified non-preference eligible candidate would be." DHA removes RANKING
+  (points, rule of three, order-of-merit certificates) and requires applicants be
+  worked roughly in order of receipt -- it does not instruct agencies to
+  deprioritize or exclude preference eligibles. A high DHA-eligible share of a
+  bucket is evidence the RANKING mechanism could have been bypassed, not evidence
+  that veterans were disadvantaged by it. Low veteran shares in DHA-eligible series
+  (e.g., 1550, 0801, 1301) are better explained by applicant-pool composition (see
+  the regimes section's notes on credential gates and military feeders) than by
+  DHA itself suppressing veteran hiring.
