@@ -97,27 +97,19 @@ mix a numerator from one table with a denominator from the other.
 **2010 is the floor, not a choice.** `veteran_indicator` first appears in the 2010-01 file;
 2005–2009 accessions have 33 columns and no veteran field at all.
 
-> **Why the share fell is not settled — and it is not the carve-outs.** Decomposing
-> 2010–12 → 2024–26 (see [`crosswalk_bucket_by_year_201001_202606.csv`](crosswalk/crosswalk_bucket_by_year_201001_202606.csv)),
-> the shift *between* channels contributed **+0.3 to +3.6 points** depending on the baseline —
-> the wrong direction — while change *within* channels contributed **−7.9 to −13.1**. Nearly
-> all of it is the ordinary competitive service, where preference applies most fully, going
-> from 49.7% veteran in 2011 to 25.7% in 2024 while its share of hiring *grew*. The
-> carve-outs are flat across the whole period, and everything added since 2010 that this
-> crosswalk can detect sums to about two points of hiring.
+> **The decline is not the carve-outs.** Decomposing 2010–12 → 2024–26
+> (see [`crosswalk_bucket_by_year_201001_202606.csv`](crosswalk/crosswalk_bucket_by_year_201001_202606.csv)),
+> movement *between* channels contributes **+0.3 to +3.6 points** depending on baseline, change
+> *within* channels **−7.9 to −13.1**. Ordinary competitive service went from 49.7% veteran in
+> 2011 to 25.7% in 2024 while its share of hiring grew. Carve-outs are flat, and everything
+> added since 2010 that this crosswalk detects sums to about two points of hiring.
 >
-> Also ruled out: the veteran population aging (the decline hits every age bracket, and 45–49
-> fell harder than 25–29), and any single channel's behavior (competitive service, excepted
-> service, and Schedule A all decline together despite unrelated law).
->
-> What remains cannot be separated with this data: cohort size, the Iraq/Afghanistan
-> separation bulge, and EO 13518 all fit the 2014 peak equally well, and age/period/cohort are
-> collinear by construction. Two preference-bypassing mechanisms are also invisible here
-> because they are recorded identically to ordinary competitive hires — agency-specific
-> direct-hire authorities, and status-based filling (there is no reinstatement or
-> merit-promotion `accession_category`). **Don't cite this table as evidence that hiring is
-> being routed around veterans' preference. It doesn't show that, either way.**
-> §4 of the notebook has the full write-up of what was tested.
+> Also rejected: the veteran population aging (every age bracket falls, 45–49 harder than
+> 25–29), and any single channel's behavior (competitive, excepted and Schedule A fall
+> together under unrelated law). What remains — cohort size, the Iraq/Afghanistan separation
+> bulge, EO 13518 winding down — is not separable here, since age, period and cohort are
+> collinear. Agency-specific DHAs and status-based filling are invisible in this data.
+> §4 of the notebook has the detail.
 
 > **The last two rows are incomplete and will grow.** A monthly data file carries personnel
 > actions that took effect in earlier months, so recent years keep accruing hires for a
