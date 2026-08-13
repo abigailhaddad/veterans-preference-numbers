@@ -148,6 +148,24 @@ def by_year_block(by_year: pd.DataFrame, end: str, min_year: int) -> str:
     return "\n".join(lines)
 
 
+def vetshare_block(vs: pd.DataFrame, end: str) -> str:
+    """Veteran share of new hires by year.
+
+    Separate denominator from by_year_block: new hires only, transfers dropped
+    (see the *_nh note in apply_crosswalk). The two tables sit near each other in
+    the README, so the counts differ visibly and the caveat below them is load-
+    bearing -- don't reconcile them by quietly switching one to the other.
+    """
+    partial_year, partial_month = int(end[:4]), int(end[4:])
+    lines = ["| Year | New hires | Veteran hires | Veteran share |", "|---|---|---|---|"]
+    for yr, row in vs.iterrows():
+        name = (f"{yr} (Jan–{['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][partial_month]})"
+                if yr == partial_year and partial_month < 12 else str(yr))
+        lines.append(f"| {name} | {int(row['new_hires']):,} | {int(row['veteran_hires']):,} "
+                     f"| {row['vet_pct']:.1f}% |")
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="201501")
@@ -163,10 +181,12 @@ def main():
 
     by_year = pd.read_csv(HERE / f"crosswalk_by_year_{args.start}_{args.end}.csv", index_col="yr")
     detail = pd.read_csv(HERE / f"crosswalk_{args.start}_{args.end}.csv")
+    vetshare = pd.read_csv(HERE / f"veteran_share_by_year_{args.start}_{args.end}.csv", index_col="yr")
 
     text = README.read_text()
     text = replace_block(text, "headline", headline_block(by_year, detail, args.headline_year))
     text = replace_block(text, "byyear", by_year_block(by_year, args.end, args.min_year))
+    text = replace_block(text, "vetshare", vetshare_block(vetshare, args.end))
     text = replace_block(text, "degradation", degradation_block(
         by_year, [int(y) for y in args.degradation_years.split(",")]))
     README.write_text(text)

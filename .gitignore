@@ -22,5 +22,11 @@ piece*
 # Crosswalk run outputs. Only the CY2024 reference run is tracked; every other
 # window is a local artifact.
 crosswalk/crosswalk_*.csv
+crosswalk/veteran_share_by_year_*.csv
 !crosswalk/crosswalk_201001_202606.csv
 !crosswalk/crosswalk_by_year_201001_202606.csv
+# Both linked from the README -- the veteran-share table is rendered from the
+# first, and the second is the basis for the shift-share decomposition behind the
+# "why the share fell" caveat. They have to be tracked or those links 404.
+!crosswalk/crosswalk_bucket_by_year_201001_202606.csv
+!crosswalk/veteran_share_by_year_201001_202606.csv

@@ -247,7 +247,7 @@ def main():
     # 201412-201501 worked only because the 201501 file carried the column.
     # Inject the absent ones as typed NULLs so their branches simply never match
     # and those records fall through to "Unknown" -- the documented behavior.
-    referenced = list(spec["metadata"]["fields_used"]) + ["veteran_indicator"]
+    referenced = list(spec["metadata"]["fields_used"]) + ["veteran_indicator", "accession_category"]
     present = {r[0] for r in con.execute(
         f"DESCRIBE SELECT * FROM read_parquet({lst}, union_by_name=true)").fetchall()}
     absent = [c for c in referenced if c not in present]
@@ -259,16 +259,26 @@ def main():
     # 2005 vs 68 today -- no department/veteran_indicator/pathways_group in the
     # earliest files). Without this, read_parquet on a mixed-schema file list
     # throws a binder error the moment --start reaches back far enough.
+    # hires/vets count every accession, INCLUDING inter-agency transfers. The
+    # *_nh columns drop those (accession_category LIKE 'TRANSFER%'): a transfer
+    # is an existing federal employee changing agencies, which never runs through
+    # a preference determination, so it does not belong in a veteran-share-of-
+    # new-hires figure. The notebook's flow query uses the same exclusion, and
+    # the two would otherwise disagree by ~285k records over 2010-2026.
     df = con.execute(f"""
         SELECT {regime_case_sql} AS bucket,
                {dha_case_sql} AS dha_eligible,
                substr(personnel_action_effective_date_yyyymm, 1, 4) AS yr,
                SUM(TRY_CAST(count AS BIGINT)) AS hires,
-               SUM(CASE WHEN veteran_indicator='Y' THEN TRY_CAST(count AS BIGINT) END) AS vets
+               SUM(CASE WHEN veteran_indicator='Y' THEN TRY_CAST(count AS BIGINT) END) AS vets,
+               SUM(CASE WHEN accession_category NOT LIKE 'TRANSFER%'
+                        THEN TRY_CAST(count AS BIGINT) END) AS hires_nh,
+               SUM(CASE WHEN accession_category NOT LIKE 'TRANSFER%' AND veteran_indicator='Y'
+                        THEN TRY_CAST(count AS BIGINT) END) AS vets_nh
         FROM (SELECT *{filler} FROM read_parquet({lst}, union_by_name=true))
         WHERE personnel_action_effective_date_yyyymm BETWEEN '{args.start}' AND '{args.end}'
         GROUP BY 1, 2, 3
-    """).df().fillna({"vets": 0})
+    """).df().fillna({"vets": 0, "hires_nh": 0, "vets_nh": 0})
 
     df["preference_status"] = df.bucket.map(label_to_status)
     df["confidence"] = df.bucket.map(label_to_confidence)
@@ -301,6 +311,29 @@ def main():
         by_year_out = HERE / f"crosswalk_by_year_{args.start}_{args.end}.csv"
         pivot.round(1).join(totals).to_csv(by_year_out)
         print(f"\nWrote {by_year_out}")
+
+        # Veteran share of new hires by year -- the headline flow figure. New
+        # hires only (transfers dropped, see the *_nh note on the query above),
+        # which is why `new_hires` here is smaller than `total` in the CSV above.
+        vs = df.groupby("yr")[["hires_nh", "vets_nh"]].sum().astype("int64")
+        vs.columns = ["new_hires", "veteran_hires"]
+        vs["vet_pct"] = (vs.veteran_hires / vs.new_hires * 100).round(1)
+        print(f"\n=== Veteran share of new hires by year, {args.start}-{args.end} ===\n")
+        print(vs.to_string())
+        vs_out = HERE / f"veteran_share_by_year_{args.start}_{args.end}.csv"
+        vs.to_csv(vs_out)
+        print(f"\nWrote {vs_out}")
+
+        # Bucket x year, so the decline in veteran share can be decomposed into
+        # "hiring moved into channels that hire fewer veterans" vs "the same
+        # channels hire fewer veterans than they used to". Collapsing to period
+        # totals makes that question unanswerable after the fact.
+        bx = (df.groupby(["yr", "veterans_preference", "bucket"])[["hires_nh", "vets_nh"]]
+                .sum().astype("int64").reset_index())
+        bx = bx[bx.hires_nh > 0]
+        bx_out = HERE / f"crosswalk_bucket_by_year_{args.start}_{args.end}.csv"
+        bx.to_csv(bx_out, index=False)
+        print(f"Wrote {bx_out}")
 
     summary = df.groupby("veterans_preference").agg(
         accessions=("hires", "sum"), veterans=("vets", "sum")).reset_index()
