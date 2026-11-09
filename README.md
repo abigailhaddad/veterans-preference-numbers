@@ -43,7 +43,7 @@ The three columns not shown — preference counted but not ranked, didn't apply,
 make up the remainder. The full six-way split by year is in
 [`crosswalk_by_year_201001_202606.csv`](crosswalk/crosswalk_by_year_201001_202606.csv).
 
-**The fast-track share roughly tripled**, from 3.2% in 2015–16 to 9–12% from 2019 on. The
+**The fast-track share roughly tripled**, from 3.2% in 2015–16 to 9–12% in 2019–2024 (6.8% in 2025 and 5.7% in the partial 2026; see the table above). The
 jump lands in 2018, which is when the government-wide STEM and cybersecurity direct-hire
 authorities came in. That's the share of hiring where preference ranking *could* have been
 bypassed and the data can't say whether it was.
